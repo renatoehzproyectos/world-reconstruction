@@ -1,4 +1,4 @@
-import type { ReferenceAvailability, ReferenceProvider, ReferenceView } from "./provider";
+import type { ReferenceAvailability, ReferenceHandle, ReferenceProvider, ReferenceView } from "./provider";
 import { getGoogleMapsApiKey } from "./settings";
 
 /**
@@ -104,24 +104,33 @@ export class GoogleStreetViewProvider implements ReferenceProvider {
     });
   }
 
-  mount(container: HTMLElement, view: ReferenceView): () => void {
+  mount(container: HTMLElement, view: ReferenceView): ReferenceHandle {
     let cancelled = false;
+    let panorama: { setPosition: (p: { lat: number; lng: number }) => void; setPov: (p: { heading: number; pitch: number }) => void } | null = null;
+    // Buffers the most recent view if update() is called before the SDK
+    // finishes loading, so an early camera move while Street View is still
+    // mounting isn't silently dropped.
+    let pendingView: ReferenceView | null = null;
     container.innerHTML = "";
 
     const key = getGoogleMapsApiKey();
     if (!key) {
       renderMessage(container, "No Google Maps API key saved. Add one in Settings to see real Street View imagery here.");
-      return () => {
-        container.innerHTML = "";
+      return {
+        update: () => {},
+        dispose: () => {
+          container.innerHTML = "";
+        },
       };
     }
 
     loadGoogleMapsScript(key)
       .then(() => {
         if (cancelled || !window.google?.maps) return;
-        new window.google.maps.StreetViewPanorama(container, {
-          position: { lat: view.lat, lng: view.lon },
-          pov: { heading: view.headingDeg, pitch: view.pitchDeg },
+        const initialView = pendingView ?? view;
+        panorama = new window.google.maps.StreetViewPanorama(container, {
+          position: { lat: initialView.lat, lng: initialView.lon },
+          pov: { heading: initialView.headingDeg, pitch: initialView.pitchDeg },
           zoom: 1,
           fullscreenControl: true,
           addressControl: true,
@@ -132,9 +141,20 @@ export class GoogleStreetViewProvider implements ReferenceProvider {
         if (!cancelled) renderMessage(container, err.message);
       });
 
-    return () => {
-      cancelled = true;
-      container.innerHTML = "";
+    return {
+      update: (nextView: ReferenceView) => {
+        if (panorama) {
+          panorama.setPosition({ lat: nextView.lat, lng: nextView.lon });
+          panorama.setPov({ heading: nextView.headingDeg, pitch: nextView.pitchDeg });
+        } else {
+          // SDK/panorama not ready yet — remember it for the .then() above.
+          pendingView = nextView;
+        }
+      },
+      dispose: () => {
+        cancelled = true;
+        container.innerHTML = "";
+      },
     };
   }
 }

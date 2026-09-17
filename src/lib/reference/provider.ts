@@ -31,17 +31,29 @@ export type ReferenceAvailability =
   | { status: "unavailable"; reason: string }
   | { status: "available" };
 
+export interface ReferenceHandle {
+  /** Push a new view (position/heading/pitch) into the already-mounted imagery without recreating it. */
+  update(view: ReferenceView): void;
+  /** Tear down whatever mount() created. */
+  dispose(): void;
+}
+
 export interface ReferenceProvider {
   readonly id: string;
   readonly label: string;
   checkAvailability(view: ReferenceView): Promise<ReferenceAvailability>;
   /**
-   * Mount imagery/controls into `container`. Returns a cleanup function.
-   * Providers own their own rendering (iframe, canvas, whatever their SDK
-   * needs) rather than exposing a React component, so swapping providers
-   * never touches workspace UI code.
+   * Mount imagery/controls into `container`. Providers own their own
+   * rendering (iframe, canvas, whatever their SDK needs) rather than
+   * exposing a React component, so swapping providers never touches
+   * workspace UI code.
+   *
+   * Returns a handle with `update()` for cheap in-place view changes (the
+   * 3D camera's heading can change many times a second while orbiting —
+   * see city-viewer.tsx's onCameraChange — so this must not recreate the
+   * whole panorama/iframe on every call) and `dispose()` for teardown.
    */
-  mount(container: HTMLElement, view: ReferenceView): () => void;
+  mount(container: HTMLElement, view: ReferenceView): ReferenceHandle;
 }
 
 /**
@@ -59,7 +71,7 @@ export class PlaceholderReferenceProvider implements ReferenceProvider {
     return { status: "unavailable", reason: "No street-level imagery provider is configured." };
   }
 
-  mount(container: HTMLElement, view: ReferenceView): () => void {
+  mount(container: HTMLElement, view: ReferenceView): ReferenceHandle {
     container.innerHTML = "";
     const wrap = document.createElement("div");
     wrap.style.cssText =
@@ -68,15 +80,23 @@ export class PlaceholderReferenceProvider implements ReferenceProvider {
     title.textContent = "Reference imagery not connected";
     title.style.cssText = "font-weight:600;color:var(--color-fg, #ddd);";
     const coords = document.createElement("div");
-    coords.textContent = `${view.lat.toFixed(6)}, ${view.lon.toFixed(6)} · heading ${Math.round(view.headingDeg)}°`;
     coords.style.cssText = "font-family:monospace;font-size:12px;";
     const hint = document.createElement("div");
     hint.textContent = "Open this location in Street View or a photo of the real place to reconstruct against it.";
     hint.style.cssText = "font-size:12px;max-width:32ch;";
     wrap.append(title, coords, hint);
     container.appendChild(wrap);
-    return () => {
-      container.innerHTML = "";
+
+    const renderCoords = (v: ReferenceView) => {
+      coords.textContent = `${v.lat.toFixed(6)}, ${v.lon.toFixed(6)} · heading ${Math.round(v.headingDeg)}°`;
+    };
+    renderCoords(view);
+
+    return {
+      update: renderCoords,
+      dispose: () => {
+        container.innerHTML = "";
+      },
     };
   }
 }

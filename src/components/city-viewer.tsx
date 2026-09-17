@@ -69,6 +69,16 @@ type Props = {
   onSidewalkClick?: (localX: number, localZ: number) => void;
   onSelectSidewalk?: (sourceId: string | undefined, featureIndex: number) => void;
   /**
+   * Called (throttled) whenever the orbit camera's orientation around its
+   * target changes, so the reference pane can track "which way is the
+   * camera looking" — see reconstruction-workspace.tsx. headingDeg/pitchDeg
+   * follow the same best-effort compass convention noted elsewhere in this
+   * codebase (e.g. buildWallsWithFacades' facade classification) — Three's
+   * own axis convention, not independently verified against true compass
+   * north.
+   */
+  onCameraChange?: (headingDeg: number, pitchDeg: number) => void;
+  /**
    * Skip buildCityMeshes' internal elevation fetch and use this grid
    * instead — see BuildSceneOptions.externalHeightGrid. Used by the
    * reconstruction workspace to apply terrain-sculpt edits without
@@ -101,6 +111,7 @@ export function CityViewer({
   onPlaceObject,
   onSidewalkClick,
   onSelectSidewalk,
+  onCameraChange,
   externalHeightGrid,
   objects,
   sidewalks,
@@ -122,6 +133,7 @@ export function CityViewer({
   const onPlaceObjectRef = useRef(onPlaceObject);
   const onSidewalkClickRef = useRef(onSidewalkClick);
   const onSelectSidewalkRef = useRef(onSelectSidewalk);
+  const onCameraChangeRef = useRef(onCameraChange);
   layersRef.current = layers;
   autoRef.current = autoRotate;
   onReadyRef.current = onReady;
@@ -135,6 +147,7 @@ export function CityViewer({
   onPlaceObjectRef.current = onPlaceObject;
   onSidewalkClickRef.current = onSidewalkClick;
   onSelectSidewalkRef.current = onSelectSidewalk;
+  onCameraChangeRef.current = onCameraChange;
   // Applies/clears the selection highlight on the live buildings mesh; set once the mesh exists.
   const applySelectionRef = useRef<((sourceIds: string[]) => void) | null>(null);
 
@@ -392,6 +405,31 @@ export function CityViewer({
         orbit.autoRotate = on && !reduced && playModeRef.current === "orbit";
       };
 
+      // Reports the camera's orbit orientation (throttled) so the reference
+      // pane can track "which way is the camera looking" — see
+      // reconstruction-workspace.tsx and onCameraChange's own doc comment
+      // above for the heading/pitch convention caveat. getAzimuthalAngle/
+      // getPolarAngle are OrbitControls' own built-ins, not hand-derived.
+      let lastCameraReport = 0;
+      const reportCamera = () => {
+        const now = performance.now();
+        if (now - lastCameraReport < 150) return; // ~6-7Hz cap, plenty for a slow-moving reference pane
+        lastCameraReport = now;
+        const azimuthalRad = orbit.getAzimuthalAngle();
+        const polarRad = orbit.getPolarAngle();
+        const headingDeg = ((azimuthalRad * 180) / Math.PI + 360) % 360;
+        // polarAngle: 0 = camera directly above target (looking straight
+        // down), PI/2 = camera level with target. Street View's pitch
+        // convention is 0 = level, positive = looking up — so a camera
+        // above its target (small polarAngle) is looking down, i.e.
+        // negative pitch. This mapping is a reasonable approximation, not
+        // independently verified against Street View's exact expectations.
+        const pitchDeg = (polarRad * 180) / Math.PI - 90;
+        onCameraChangeRef.current?.(headingDeg, pitchDeg);
+      };
+      orbit.addEventListener("change", reportCamera);
+      reportCamera(); // initial orientation, not just on first move
+
       // Spawn marker (visible in pick phase)
       const markerGeo = new THREE.SphereGeometry(1.2, 12, 12);
       const markerMat = new THREE.MeshStandardMaterial({
@@ -603,6 +641,7 @@ export function CityViewer({
         cancelAnimationFrame(raf);
         ro.disconnect();
         timer.dispose();
+        orbit.removeEventListener("change", reportCamera);
         orbit.dispose();
         vehicleRef.current?.dispose();
         skyGeo.dispose();
@@ -628,6 +667,7 @@ export function CityViewer({
         cancelAnimationFrame(raf);
         ro.disconnect();
         timer.dispose();
+        orbit.removeEventListener("change", reportCamera);
         orbit.dispose();
         renderer.domElement.removeEventListener("pointerup", onPointerUp);
         renderer.domElement.removeEventListener("pointerup", onBuildingPick);

@@ -444,7 +444,16 @@ function buildWallsWithFacades(
   geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(indices);
   geo.computeVertexNormals();
-  return geo;
+  // extrudeShape() below (the path this function replaces for
+  // facade-colored buildings) produces non-indexed geometry — confirmed
+  // empirically, it's not just an assumption (see
+  // scripts/verification/repro-merge.mjs). mergeGeometries() requires every
+  // geometry in a batch to be either all-indexed or all-non-indexed; mixing
+  // this indexed geometry into the same wallGeos array as extrudeShape's
+  // non-indexed output threw "All geometries must have compatible
+  // attributes... index attribute exists among all geometries, or in none
+  // of them" at runtime. toNonIndexed() matches the existing convention.
+  return geo.toNonIndexed();
 }
 
 /**
@@ -498,7 +507,10 @@ function buildTopCap(
   geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(indices);
   geo.computeVertexNormals();
-  return geo;
+  // Same non-indexed requirement as buildWallsWithFacades above — this cap
+  // merges into the same wallGeos array as extrudeShape's non-indexed
+  // output, see that function's comment for the empirical confirmation.
+  return geo.toNonIndexed();
 }
 
 function roofGeometry(b: BuildingFeature, riseOverride?: number): THREE.BufferGeometry | null {

@@ -327,12 +327,8 @@ session).
   declares just the handful of Maps JS API shapes this file calls — not the
   full `@types/google.maps` surface. Fine for what's used; would need
   extending for anything beyond a basic panorama.
-- **No heading/pitch control yet.** `ReferenceView.headingDeg`/`pitchDeg`
-  are wired through to the panorama's `pov`, but the workspace always
-  passes `0, 0` — there's no UI to look around independently of the 3D
-  camera. A real "look left, see the building, edit right" workflow
-  probably wants the reference pane's heading to track the 3D camera's
-  orientation; that linkage doesn't exist yet.
+- **Heading/pitch now link to the 3D camera** — see the new section below,
+  this was fixed after being flagged here.
 - The key itself never touches this app's own network calls — it's read
   from `localStorage` and handed straight to Google's own script tag in the
   browser. Worth being aware of the usual caveats of a client-side API key
@@ -340,7 +336,86 @@ session).
   Google Cloud Console) — that's a Google Cloud Console setting, not
   something this app enforces.
 
+## Progress (updated — camera-linked heading + a real bug fixed from live testing)
 
+**First bug report from an actual running instance, and it's fixed.** Two
+things this pass:
+
+### Bug fix: `mergeGeometries()` "index attribute" crash
+
+The person testing this reported:
+
+```
+Error: THREE.BufferGeometryUtils: .mergeGeometries() failed with geometry
+at index 1. All geometries must have compatible attributes; make sure
+index attribute exists among all geometries, or in none of them.
+```
+
+Root cause, confirmed by reproduction rather than guessed: `extrudeShape()`
+(used for buildings without a facade-color override) produces **non-indexed**
+geometry — this was empirically checked, not assumed, and turned out to
+contradict what the per-side facade work from a previous pass assumed.
+`buildWallsWithFacades()`/`buildTopCap()` (added for per-side facade
+rendering) produced **indexed** geometry. `mergeGeometries()` requires an
+entire batch to be uniformly indexed or uniformly non-indexed; mixing them
+is exactly what threw this error, for any base world containing at least
+one building with a facade-color edit next to one without.
+
+Fix: both functions now return `geo.toNonIndexed()`, matching
+`extrudeShape()`'s existing (and apparently load-bearing) convention.
+Verified with a standalone script,
+`scripts/verification/repro-merge-index-mismatch.mjs`, which builds a
+realistic 5-building mixed batch (matching real construction order) using
+the exact same logic as the real code, confirms the failure reproduces
+before the fix and resolves after it. Also confirmed roof geometries
+(`roofGeometry`/`gableRoofGeometry`/`shedRoofGeometry`/`roofClutterGeometry`)
+were never at risk of the same bug — all four are indexed, consistently.
+
+This is the first bug in this project caught by an actual user running the
+actual app, rather than by typecheck/build/standalone-script verification.
+It's a good illustration of exactly the gap this document has been honest
+about all along: none of the verification tooling used in previous passes
+(tsc, vite build, SSR boot, geometry-math scripts) could have caught this,
+because it only manifests when two specific code paths' outputs get merged
+together at runtime with real data. That needs a running app.
+
+### Reference pane heading now tracks the 3D camera
+
+Requested directly: "link heading." Previously the reference pane's
+heading/pitch were wired through to the Street View panorama's `pov` but
+always passed `0, 0` — no connection to the 3D view's camera. Now:
+
+- `ReferenceProvider.mount()` was redesigned to return `{ update, dispose }`
+  instead of a bare cleanup function, so a camera-orientation change (which
+  can fire many times a second while orbiting) updates the existing
+  panorama in place (`setPosition`/`setPov`) instead of tearing down and
+  recreating it — the old cleanup-function shape would have made every
+  camera frame remount the whole Street View panorama, unusable in
+  practice.
+- `city-viewer.tsx` reports the orbit camera's orientation via a new
+  `onCameraChange` callback, throttled to ~150ms, using `OrbitControls`'
+  own built-in `getAzimuthalAngle()`/`getPolarAngle()` — not hand-derived
+  trigonometry.
+- `reconstruction-workspace.tsx` holds that heading/pitch in state and
+  feeds it into the `ReferenceView` passed to `ReferencePane`.
+- Saving/clearing the API key in Settings now bumps a `providerVersion`
+  passed to `ReferencePane` as a remount trigger, so switching from the
+  placeholder to real Street View (or back) takes effect immediately
+  without a page reload — this didn't work before since `ReferencePane`
+  had no way to know the active provider had changed.
+
+**Honest caveat on the heading/pitch mapping itself:** the conversion from
+Three.js's azimuthal/polar angles to compass heading and Street View pitch
+is a reasonable geometric mapping, not independently verified against
+Street View's exact expectations or true compass north — consistent with
+the same caveat already documented elsewhere in this codebase (e.g. the
+facade-side classification in `buildWallsWithFacades`). It's never been
+seen next to a real Street View panorama to confirm "look left in 3D, see
+the same direction in Street View" actually holds.
+
+---
+
+# Final status audit (spec section by section)
 
 This maps every major spec section to what's actually true right now, not
 what sounds complete. "Built" means code exists, typechecks, and builds.
@@ -382,13 +457,18 @@ imagery" above):
    a client-side app; adding "community" without a backend would mean
    either faking it (which helps no one) or quietly building a backend
    nobody asked to provision, pay for, or operate.
-2. **Visual/UX verification.** Thirteen feature passes, zero times seen
-   rendering in an actual browser (the Street View integration specifically
-   has never run against a real key — this sandbox's network egress
-   doesn't reach Google's servers). Every "Done, typechecked, built" claim
-   in this document is honest about what was checked and equally honest
-   about what wasn't. Compiling and not crashing on load is necessary, not
-   sufficient, for "this works."
+2. **Visual/UX verification.** This is no longer "zero times seen running"
+   — the merge-index bug fix above was a direct result of someone actually
+   running the app and reporting a real crash, and it's the first bug this
+   project has fixed from that kind of feedback rather than from
+   typecheck/build/standalone-script checks alone. That's real progress on
+   this exact gap, and also proof it was a real gap: none of this session's
+   own verification tooling could have caught that bug. The gap isn't
+   closed, though — most of this project (picking accuracy, visual
+   correctness of the geometry, the Street View integration specifically,
+   general usability) still hasn't been exercised by a person. Every "Done,
+   typechecked, built" claim in this document remains honest about what was
+   checked and equally honest about what wasn't.
 
 ## Honest bottom line
 

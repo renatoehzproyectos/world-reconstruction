@@ -108,11 +108,15 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
     return project.deltas.sidewalks.find((s) => s.id === selectedSidewalkId) ?? null;
   }, [project, selectedSidewalkId]);
 
+  const [cameraHeadingDeg, setCameraHeadingDeg] = useState(0);
+  const [cameraPitchDeg, setCameraPitchDeg] = useState(0);
+  const [referenceProviderVersion, setReferenceProviderVersion] = useState(0);
+
   const referenceView = useMemo(() => {
     if (!city) return null;
     const center = bboxCenter(city.bbox);
-    return { lon: center.lon, lat: center.lat, headingDeg: 0, pitchDeg: 0 };
-  }, [city]);
+    return { lon: center.lon, lat: center.lat, headingDeg: cameraHeadingDeg, pitchDeg: cameraPitchDeg };
+  }, [city, cameraHeadingDeg, cameraPitchDeg]);
 
   const editedGrid: HeightGrid | null | undefined = useMemo(() => {
     if (!baseGrid) return undefined;
@@ -272,7 +276,9 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
         <div className="relative min-h-0 border-b border-border md:border-b-0 md:border-r">
-          {referenceView && <ReferencePane view={referenceView} className="h-full w-full" />}
+          {referenceView && (
+            <ReferencePane view={referenceView} providerVersion={referenceProviderVersion} className="h-full w-full" />
+          )}
         </div>
 
         <div className="relative min-h-0">
@@ -301,6 +307,10 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
             onPlaceObject={handlePlaceObject}
             onSidewalkClick={handleSidewalkClick}
             onSelectSidewalk={(sourceId) => setSelectedSidewalkId(sourceId ?? null)}
+            onCameraChange={(heading, pitch) => {
+              setCameraHeadingDeg(heading);
+              setCameraPitchDeg(pitch);
+            }}
             externalHeightGrid={editedGrid}
             objects={project?.deltas.objects}
             sidewalks={project?.deltas.sidewalks}
@@ -365,7 +375,11 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
 
           {openPanel === "settings" && (
             <div className="absolute inset-y-0 right-0 z-10 w-[min(90vw,340px)] border-l border-border bg-surface/95 backdrop-blur">
-              <SettingsPanel onClose={() => setOpenPanel("none")} className="h-full" />
+              <SettingsPanel
+                onClose={() => setOpenPanel("none")}
+                onProviderChanged={() => setReferenceProviderVersion((v) => v + 1)}
+                className="h-full"
+              />
             </div>
           )}
 

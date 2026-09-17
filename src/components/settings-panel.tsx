@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 
 type Props = {
   onClose: () => void;
+  /** Called after the API key is saved/cleared and the active provider refreshed, so the parent can force the reference pane to remount with the new provider. */
+  onProviderChanged?: () => void;
   className?: string;
 };
 
@@ -18,13 +20,14 @@ type Props = {
  * the person typed in themselves and explicitly chose to persist, not
  * something the app assumes or ships with.
  */
-export function SettingsPanel({ onClose, className }: Props) {
+export function SettingsPanel({ onClose, onProviderChanged, className }: Props) {
   const [key, setKey] = useState(() => getGoogleMapsApiKey() ?? "");
   const [saved, setSaved] = useState<"idle" | "saved" | "cleared">("idle");
 
   const handleSave = () => {
     setGoogleMapsApiKey(key);
     refreshReferenceProvider();
+    onProviderChanged?.();
     setSaved("saved");
     setTimeout(() => setSaved("idle"), 1500);
   };
@@ -33,6 +36,7 @@ export function SettingsPanel({ onClose, className }: Props) {
     clearGoogleMapsApiKey();
     setKey("");
     refreshReferenceProvider();
+    onProviderChanged?.();
     setSaved("cleared");
     setTimeout(() => setSaved("idle"), 1500);
   };
