@@ -413,6 +413,85 @@ facade-side classification in `buildWallsWithFacades`). It's never been
 seen next to a real Street View panorama to confirm "look left in 3D, see
 the same direction in Street View" actually holds.
 
+## Progress (updated — the errors persisted, and here's why, with proof)
+
+The previous fix (making `buildWallsWithFacades`/`buildTopCap` non-indexed)
+was correct but incomplete — the person testing this reported the exact
+same `mergeGeometries()` error plus a new one, `Cannot read properties of
+null (reading 'getAttribute')`, after that fix was already in place. Rather
+than guess again, this pass built real tooling to stop guessing:
+
+### New verification approach: running the actual production code, not a reimplementation
+
+`scripts/verification/repro-real-buildcitymeshes.mjs` uses **Vite's own SSR
+module loader** — the same transform pipeline the real app uses in dev — to
+import and call the real, unmodified `buildCityMeshes()` export against
+realistic synthetic `CityData` (mixed plain/facade-colored/holed buildings,
+roof overrides). This is a meaningfully stronger check than every previous
+verification script in this project, which re-implemented the logic under
+test by hand and could only prove "my re-implementation is internally
+consistent," not "the actual shipped code works." A minimal `document`
+stub (a permissive fake canvas 2D context) lets it run outside a browser
+DOM, since `createWindowTexture()` needs `document.createElement`.
+
+Running this against the walls/facade fix from last pass: **success, no
+crash.** That fix was genuinely correct. So the user's continued error had
+to be coming from somewhere else.
+
+### The real second bug, found by testing with tree scattering enabled
+
+The first repro script disabled tree scattering (`treeDensity: 0`) for
+simplicity — it never exercised `scatterTrees()`/`createTreeGeometry()` at
+all. Re-running with tree scattering enabled and a synthetic height grid
+(`scripts/verification/repro-tree-merge.mjs`) reproduced **both** errors
+exactly, with a real stack trace:
+
+```
+THREE.BufferGeometryUtils: .mergeGeometries() failed with geometry at
+index 1. All geometries must have compatible attributes...
+THREW: TypeError: Cannot read properties of null (reading 'getAttribute')
+    at paintTree (build-scene.ts:1268:23)
+    at createTreeGeometry (build-scene.ts:1342:2)
+    at scatterTrees (build-scene.ts:1599:20)
+```
+
+Root cause: `IcosahedronGeometry` is **non-indexed** in this Three version,
+while `CylinderGeometry`/`ConeGeometry` are **indexed** — confirmed
+empirically, the same way every indexing claim in this document has been
+checked rather than assumed. `createTreeGeometry`'s "round" and "layered"
+tree shapes (2 of the 3 variants scattered trees randomly pick from) mix an
+Icosahedron canopy with a Cylinder trunk. `mergeGeometries()` returned
+`null` for those two variants; a `!` non-null assertion immediately after
+silently lied to TypeScript about that, and `paintTree(null, ...)` threw
+exactly the error reported.
+
+**This bug predates this session's work entirely** — it was already in the
+`bmap`/City-GLB reference project this whole thing was built on top of,
+latent because nothing before this session had run `buildCityMeshes()` with
+tree scattering enabled against real code and actually looked at the
+result. It's not a regression from the facade-rendering work; it's a
+second, independent, older bug that live testing happened to surface at
+the same time.
+
+**Fix:** every primitive contributing to a tree's merged geometry is now
+normalized to non-indexed (`.toNonIndexed()`) before merging, for all three
+variants — not just the two that were broken, so this can't quietly regress
+if a future Three version changes another primitive's default indexing.
+Added a defensive fallback (log + empty geometry instead of a crash) for
+the same reason. Re-running `repro-tree-merge.mjs` against the fix: 195
+trees scattered successfully, no crash, no error.
+
+### Why this matters more than the fix itself
+
+This is the clearest demonstration yet of the gap this document has named
+every pass: the previous fix was real and correct, verified by every tool
+available at the time, and it was still not the whole story, because a
+different code path (tree scattering) simply hadn't been exercised. The
+fix for *that* now exists specifically because someone ran the actual app
+and reported what actually broke — confirming, again, that this kind of
+bug is structurally invisible to typecheck/build/standalone-script
+verification and only surfaces from real use.
+
 ---
 
 # Final status audit (spec section by section)

@@ -1312,41 +1312,61 @@ function paintTree(merged: THREE.BufferGeometry, trunkTopY: number, canopyTint: 
 }
 
 function createTreeGeometry(kind: TreeKind, tint: [number, number, number]): THREE.BufferGeometry {
-  let merged: THREE.BufferGeometry;
+  let merged: THREE.BufferGeometry | null;
   let trunkTop: number;
+  // Every contributing primitive is normalized to non-indexed before
+  // merging. This mattered in practice, not just in theory: CylinderGeometry
+  // and ConeGeometry are indexed by default in this Three version, but
+  // IcosahedronGeometry (used for the "round" and "layered" canopy shapes)
+  // is non-indexed — confirmed empirically, not assumed (same kind of check
+  // as build-scene.ts's buildWallsWithFacades). Mixing them made
+  // mergeGeometries() return null for 2 of the 3 tree variants, and the `!`
+  // non-null assertions that used to follow silently turned that into
+  // "Cannot read properties of null (reading 'getAttribute')" inside
+  // paintTree() below whenever a scattered tree happened to roll "round" or
+  // "layered" — a real, reproduced, now-fixed bug (see
+  // scripts/verification/repro-tree-merge.mjs), not a hypothetical one.
   if (kind === "conifer") {
-    const trunk = new THREE.CylinderGeometry(0.22, 0.38, 3.4, 6);
+    const trunk = new THREE.CylinderGeometry(0.22, 0.38, 3.4, 6).toNonIndexed();
     trunk.translate(0, 1.7, 0);
-    const c1 = new THREE.ConeGeometry(2.1, 3.6, 8);
+    const c1 = new THREE.ConeGeometry(2.1, 3.6, 8).toNonIndexed();
     c1.translate(0, 4.6, 0);
-    const c2 = new THREE.ConeGeometry(1.55, 3.2, 8);
+    const c2 = new THREE.ConeGeometry(1.55, 3.2, 8).toNonIndexed();
     c2.translate(0, 6.6, 0);
-    const c3 = new THREE.ConeGeometry(0.95, 2.4, 8);
+    const c3 = new THREE.ConeGeometry(0.95, 2.4, 8).toNonIndexed();
     c3.translate(0, 8.4, 0);
-    merged = mergeGeometries([trunk, c1, c2, c3], false)!;
+    merged = mergeGeometries([trunk, c1, c2, c3], false);
     [trunk, c1, c2, c3].forEach((g) => g.dispose());
     trunkTop = 3.0;
   } else if (kind === "round") {
-    const trunk = new THREE.CylinderGeometry(0.26, 0.42, 3.6, 6);
+    const trunk = new THREE.CylinderGeometry(0.26, 0.42, 3.6, 6).toNonIndexed();
     trunk.translate(0, 1.8, 0);
-    const canopy = new THREE.IcosahedronGeometry(2.6, 1);
+    const canopy = new THREE.IcosahedronGeometry(2.6, 1).toNonIndexed();
     canopy.scale(1, 0.85, 1);
     canopy.translate(0, 5.4, 0);
-    merged = mergeGeometries([trunk, canopy], false)!;
+    merged = mergeGeometries([trunk, canopy], false);
     [trunk, canopy].forEach((g) => g.dispose());
     trunkTop = 3.4;
   } else {
-    const trunk = new THREE.CylinderGeometry(0.24, 0.4, 3.8, 6);
+    const trunk = new THREE.CylinderGeometry(0.24, 0.4, 3.8, 6).toNonIndexed();
     trunk.translate(0, 1.9, 0);
-    const lobe1 = new THREE.IcosahedronGeometry(1.9, 0);
+    const lobe1 = new THREE.IcosahedronGeometry(1.9, 0).toNonIndexed();
     lobe1.translate(-1.1, 5.0, 0.3);
-    const lobe2 = new THREE.IcosahedronGeometry(2.1, 0);
+    const lobe2 = new THREE.IcosahedronGeometry(2.1, 0).toNonIndexed();
     lobe2.translate(1.0, 5.6, -0.4);
-    const lobe3 = new THREE.IcosahedronGeometry(1.7, 0);
+    const lobe3 = new THREE.IcosahedronGeometry(1.7, 0).toNonIndexed();
     lobe3.translate(0.1, 6.6, 0.7);
-    merged = mergeGeometries([trunk, lobe1, lobe2, lobe3], false)!;
+    merged = mergeGeometries([trunk, lobe1, lobe2, lobe3], false);
     [trunk, lobe1, lobe2, lobe3].forEach((g) => g.dispose());
     trunkTop = 3.6;
+  }
+  // Defensive fallback (should be unreachable now that inputs are
+  // consistently non-indexed, but a null merge silently producing an
+  // invisible tree is preferable to a hard crash if some future Three
+  // version changes a primitive's indexing again).
+  if (!merged) {
+    console.warn(`createTreeGeometry: mergeGeometries returned null for kind="${kind}" — rendering an empty tree.`);
+    merged = new THREE.BufferGeometry();
   }
   paintTree(merged, trunkTop, tint);
   return merged;
