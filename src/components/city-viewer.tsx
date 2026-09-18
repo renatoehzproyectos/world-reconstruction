@@ -500,7 +500,10 @@ export function CityViewer({
         spawnMarker,
       };
 
-      // --- Building selection (orbit mode only; separate from vehicle spawn picking below) ---
+      // --- Reconstruction editing picks (available both in orbit and while driving) ---
+      // Vehicle spawning remains phase-gated below, but once the car is driving
+      // the same raycast can still be used by the active reconstruction tool.
+
       const buildingIndex = meshes.buildingIndex;
       const roadIndex = meshes.roadIndex;
       const sidewalkIndex = meshes.sidewalkIndex;
@@ -552,7 +555,8 @@ export function CityViewer({
 
       const onBuildingPick = (e: PointerEvent) => {
         if (e.target !== renderer.domElement) return;
-        if (playModeRef.current !== "orbit") return;
+        // Editing is intentionally allowed while driving. The vehicle HUD is
+        // outside the canvas, so its controls never reach this handler.
         if (pickModeRef.current === "off") return;
         const rect = renderer.domElement.getBoundingClientRect();
         pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;

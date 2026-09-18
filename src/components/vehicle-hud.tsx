@@ -75,6 +75,10 @@ export function VehicleHud({ mode, phase, onMode, onInput, className }: Props) {
 
       {mode === "car" && phase === "drive" && (
         <>
+          {/* Editing remains active while driving; toolbar tools can raycast the scene. */}
+          <div className="pointer-events-none absolute right-3 top-2 rounded-md border border-border bg-surface/90 px-2 py-1 text-[10px] font-medium text-fg shadow">
+            Edit mode available
+          </div>
           {/* D-pad */}
           <div className="pointer-events-auto absolute bottom-6 left-3 grid grid-cols-3 gap-1">
             <span />
