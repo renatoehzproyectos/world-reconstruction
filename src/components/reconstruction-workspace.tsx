@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { CityData } from "@/lib/city/types";
 import type { HeightGrid } from "@/lib/city/elevation";
+import type { RoadSpawn } from "@/lib/city/road-spawn";
 
 type Tool = "select" | "terrain" | "road" | "object" | "sidewalk" | "sidewalk-edit";
 
@@ -112,11 +113,27 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
   const [cameraPitchDeg, setCameraPitchDeg] = useState(0);
   const [referenceProviderVersion, setReferenceProviderVersion] = useState(0);
 
+  /**
+   * Where the player actually is, at road level. Set by the viewer's road
+   * spawn (see lib/city/road-spawn.ts) and then updated as the car drives,
+   * so the Street View pane on the left stays the road-level reference for
+   * the exact spot the player occupies on the right.
+   */
+  const [playerView, setPlayerView] = useState<{ lat: number; lon: number; headingDeg: number } | null>(null);
+  const [spawnInfo, setSpawnInfo] = useState<RoadSpawn | null>(null);
+  const [spawnError, setSpawnError] = useState<string | null>(null);
+  const [spawnSerial, setSpawnSerial] = useState(0);
+
   const referenceView = useMemo(() => {
     if (!city) return null;
+    if (playerView) {
+      // Road level: match the player's own position/heading, and look level
+      // (Street View pitch 0) the way a driver would.
+      return { lon: playerView.lon, lat: playerView.lat, headingDeg: playerView.headingDeg, pitchDeg: 0 };
+    }
     const center = bboxCenter(city.bbox);
     return { lon: center.lon, lat: center.lat, headingDeg: cameraHeadingDeg, pitchDeg: cameraPitchDeg };
-  }, [city, cameraHeadingDeg, cameraPitchDeg]);
+  }, [city, playerView, cameraHeadingDeg, cameraPitchDeg]);
 
   const editedGrid: HeightGrid | null | undefined = useMemo(() => {
     if (!baseGrid) return undefined;
@@ -264,6 +281,18 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
           <Button
             variant="outline"
             size="sm"
+            onClick={() => setSpawnSerial((v) => v + 1)}
+            title={
+              spawnInfo
+                ? `On ${spawnInfo.highway} · ground ${spawnInfo.groundY.toFixed(1)} m · heading ${Math.round(spawnInfo.headingDeg)}°`
+                : "Place the player on the nearest road at ground level"
+            }
+          >
+            Respawn on road
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setOpenPanel((v) => (v === "settings" ? "none" : "settings"))}
           >
             Settings
@@ -317,7 +346,24 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
             onHeightGrid={(grid) => {
               setBaseGrid((prev) => prev ?? grid);
             }}
+            autoSpawnOnRoad
+            spawnSerial={spawnSerial}
+            onRoadSpawn={(spawn) => {
+              setSpawnInfo(spawn);
+              setSpawnError(null);
+            }}
+            onRoadSpawnFailed={(reason) => {
+              setSpawnInfo(null);
+              setSpawnError(reason);
+            }}
+            onPlayerView={(lat, lon, headingDeg) => setPlayerView({ lat, lon, headingDeg })}
           />
+
+          {spawnError && (
+            <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[min(90%,34ch)] rounded-md border border-border bg-surface/95 px-3 py-2 text-[11px] text-muted shadow-lg">
+              {spawnError}
+            </div>
+          )}
 
           {tool === "terrain" && (
             <div className="absolute left-3 top-3 w-[min(85vw,280px)]">

@@ -81,7 +81,9 @@ async function readOneFile(
 
   let metadata: FileMetaData | undefined;
   try {
-    metadata = await parquetMetadataAsync(file, { compressors });
+    // Metadata parsing needs no decompressor in this hyparquet version;
+    // `compressors` is passed to parquetRead below where pages are decoded.
+    metadata = await parquetMetadataAsync(file);
   } catch {
     metadata = undefined;
   }

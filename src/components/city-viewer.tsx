@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CityData, CityStats } from "@/lib/city/types";
-import { bboxSizeMeters } from "@/lib/city/geo";
+import { bboxSizeMeters, unproject } from "@/lib/city/geo";
+import { findNearestRoadSpawn, yawToHeadingDeg } from "@/lib/city/road-spawn";
 import { cityFilename } from "@/lib/city/filename";
 import {
   createVehicleController,
@@ -90,6 +91,28 @@ type Props = {
   sidewalks?: import("@/lib/reconstruction/types").SidewalkFeature[];
   /** Called once per rebuild with whatever height grid the build actually used (fetched or external). */
   onHeightGrid?: (grid: import("@/lib/city/elevation").HeightGrid | null) => void;
+  /**
+   * When true, the viewer does NOT start as an orbit/drone camera: as soon
+   * as the meshes (and height grid) exist it places the car on the nearest
+   * drivable road at ground height, oriented along that road, and enters
+   * normal driving view. See lib/city/road-spawn.ts. Used by the
+   * reconstruction workspace so Reconstruct lands you at street level,
+   * matching the Street View reference pane.
+   */
+  autoSpawnOnRoad?: boolean;
+  /** Bump to re-run the road spawn (e.g. a "Respawn on road" button). */
+  spawnSerial?: number;
+  /** Local-meter point to search around for the nearest road. Defaults to the tile center. */
+  spawnTarget?: { x: number; z: number } | null;
+  /** Reports the actual spawn pose that was used (ground height, road heading, lat/lon). */
+  onRoadSpawn?: (spawn: import("@/lib/city/road-spawn").RoadSpawn) => void;
+  /** Called when no usable road could be found, so the caller can surface it. */
+  onRoadSpawnFailed?: (reason: string) => void;
+  /**
+   * Throttled player view while driving (geographic position + compass
+   * heading of the car), so a street-level reference pane can follow along.
+   */
+  onPlayerView?: (lat: number, lon: number, headingDeg: number) => void;
 };
 
 export function CityViewer({
@@ -116,6 +139,12 @@ export function CityViewer({
   objects,
   sidewalks,
   onHeightGrid,
+  autoSpawnOnRoad = false,
+  spawnSerial = 0,
+  spawnTarget = null,
+  onRoadSpawn,
+  onRoadSpawnFailed,
+  onPlayerView,
   className,
 }: Props) {
   const setMeshProgress = useStudio((s) => s.setMeshProgress);
@@ -134,6 +163,18 @@ export function CityViewer({
   const onSidewalkClickRef = useRef(onSidewalkClick);
   const onSelectSidewalkRef = useRef(onSelectSidewalk);
   const onCameraChangeRef = useRef(onCameraChange);
+  const autoSpawnRef = useRef(autoSpawnOnRoad);
+  const spawnTargetRef = useRef(spawnTarget);
+  const onRoadSpawnRef = useRef(onRoadSpawn);
+  const onRoadSpawnFailedRef = useRef(onRoadSpawnFailed);
+  const onPlayerViewRef = useRef(onPlayerView);
+  autoSpawnRef.current = autoSpawnOnRoad;
+  spawnTargetRef.current = spawnTarget;
+  onRoadSpawnRef.current = onRoadSpawn;
+  onRoadSpawnFailedRef.current = onRoadSpawnFailed;
+  onPlayerViewRef.current = onPlayerView;
+  /** Set once the scene exists: places the player on the nearest road at ground height. */
+  const spawnOnRoadRef = useRef<(() => boolean) | null>(null);
   layersRef.current = layers;
   autoRef.current = autoRotate;
   onReadyRef.current = onReady;
@@ -171,6 +212,12 @@ export function CityViewer({
   useEffect(() => {
     applySelectionRef.current?.(selectedSourceIds);
   }, [selectedSourceIds]);
+
+  // Explicit respawn request (spawnSerial bump). The initial spawn happens
+  // inside the scene effect itself, as soon as the meshes/height grid exist.
+  useEffect(() => {
+    if (spawnSerial > 0) spawnOnRoadRef.current?.();
+  }, [spawnSerial]);
 
   // Play mode lives outside the mesh-rebuild effect so switching car/plane
   // does not recreate the WebGL context.
@@ -592,6 +639,56 @@ export function CityViewer({
         inputRef.current = { ...EMPTY_INPUT };
       };
 
+      /**
+       * Ground-level road spawn (no drone camera, no click-to-pick): find
+       * the nearest drivable road to the target point, sample the terrain
+       * height there once, place the car on it facing along the road, and
+       * switch straight into the normal driving view.
+       */
+      const spawnOnRoad = (): boolean => {
+        const target = spawnTargetRef.current;
+        const spawn = findNearestRoadSpawn(city, {
+          targetX: target?.x ?? 0,
+          targetZ: target?.z ?? 0,
+          heightGrid: meshes.heightGrid,
+        });
+        if (!spawn) {
+          onRoadSpawnFailedRef.current?.(
+            "No drivable road was found in this area, so the player stayed in orbit view. Pick an area that includes a street, or click the ground to place yourself manually.",
+          );
+          return false;
+        }
+
+        vehicleRef.current?.dispose();
+        const vehicle = createVehicleController("car", city, meshes.heightGrid, scene);
+        vehicle.spawnAt(spawn.x, spawn.y, spawn.z, spawn.yaw);
+        vehicleRef.current = vehicle;
+
+        spawnMarker.visible = false;
+        orbit.enabled = false;
+        orbit.autoRotate = false;
+        setPlayMode("car");
+        playModeRef.current = "car";
+        setPhase("drive");
+        phaseRef.current = "drive";
+        inputRef.current = { ...EMPTY_INPUT };
+
+        // Snap the chase camera behind the car immediately so the first
+        // rendered frame is already a road-level view, not a lerp down from
+        // the bird's-eye position.
+        camera.position.set(
+          spawn.x - Math.sin(spawn.yaw) * 12,
+          spawn.y + 5.5,
+          spawn.z - Math.cos(spawn.yaw) * 12,
+        );
+        camera.lookAt(spawn.x, spawn.y + 1.2, spawn.z);
+
+        onRoadSpawnRef.current?.(spawn);
+        onPlayerViewRef.current?.(spawn.lat, spawn.lon, spawn.headingDeg);
+        return true;
+      };
+      spawnOnRoadRef.current = spawnOnRoad;
+
       const onPointerUp = (e: PointerEvent) => {
         // Ignore UI taps (HUD is outside canvas, but safety: only canvas)
         if (e.target !== renderer.domElement) return;
@@ -618,6 +715,7 @@ export function CityViewer({
       timer.connect(document);
       let raf = 0;
       let last = performance.now();
+      let lastPlayerReport = 0;
       const loop = () => {
         if (dead) return;
         raf = requestAnimationFrame(loop);
@@ -630,6 +728,14 @@ export function CityViewer({
         if (mode !== "orbit" && phaseRef.current === "drive" && vehicleRef.current) {
           vehicleRef.current.update(dt, inputRef.current);
           updateFollowCamera(camera, vehicleRef.current.group, mode, dt);
+          // Throttled player position/heading for a street-level reference
+          // pane (same cadence as the orbit camera report above).
+          if (onPlayerViewRef.current && now - lastPlayerReport > 400) {
+            lastPlayerReport = now;
+            const g = vehicleRef.current.group;
+            const [lon, lat] = unproject(g.position.x, g.position.z, city.origin.lon, city.origin.lat);
+            onPlayerViewRef.current(lat, lon, yawToHeadingDeg(g.rotation.y));
+          }
         } else {
           orbit.update();
         }
@@ -656,6 +762,11 @@ export function CityViewer({
 
       onReadyRef.current(meshes.stats);
       onHeightGridRef.current?.(meshes.heightGrid ?? null);
+
+      // Reconstruct enters at street level: place the player on the nearest
+      // road now that the meshes and height grid exist, instead of leaving
+      // the orbit/drone camera above the terrain.
+      if (autoSpawnRef.current) spawnOnRoad();
       const group = meshes.group;
       const filename = cityFilename(city.placeName);
       onExportReadyRef.current(async () => {
@@ -672,6 +783,7 @@ export function CityViewer({
         renderer.domElement.removeEventListener("pointerup", onPointerUp);
         renderer.domElement.removeEventListener("pointerup", onBuildingPick);
         applySelectionRef.current = null;
+        spawnOnRoadRef.current = null;
         vehicleRef.current?.dispose();
         vehicleRef.current = null;
         sceneApiRef.current = null;

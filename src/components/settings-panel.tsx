@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getGoogleMapsApiKey, setGoogleMapsApiKey, clearGoogleMapsApiKey } from "@/lib/reference/settings";
 import { refreshReferenceProvider } from "@/lib/reference/provider";
 import { Button } from "@/components/ui/button";
@@ -13,32 +13,53 @@ type Props = {
   className?: string;
 };
 
+/** Masked preview of a saved key — never shows the whole value. */
+function maskKey(key: string): string {
+  if (key.length <= 4) return "••••";
+  return `${"•".repeat(Math.min(20, Math.max(8, key.length - 4)))}${key.slice(-4)}`;
+}
+
 /**
- * Textbox → Save forever → the reference pane starts using real Street
- * View imagery. "Save forever" means localStorage, same as every other
- * saved value in this app (see reference/settings.ts) — this is a value
- * the person typed in themselves and explicitly chose to persist, not
- * something the app assumes or ships with.
+ * Street View API Key configuration. The key is typed in by the person
+ * using the app, stored in localStorage (reference/settings.ts — the same
+ * persistence the rest of the app uses), loaded again automatically on the
+ * next visit, and handed straight to Google's own SDK by the Street View
+ * provider. It is never hardcoded, committed, or sent through this app's
+ * own network calls, and the full value is never rendered anywhere else in
+ * the UI.
  */
 export function SettingsPanel({ onClose, onProviderChanged, className }: Props) {
-  const [key, setKey] = useState(() => getGoogleMapsApiKey() ?? "");
-  const [saved, setSaved] = useState<"idle" | "saved" | "cleared">("idle");
+  // Loaded on mount so a key saved in an earlier session is already there
+  // after a refresh, with no re-entry.
+  const [key, setKey] = useState("");
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+  const [reveal, setReveal] = useState(false);
+  const [status, setStatus] = useState<"idle" | "saved" | "cleared">("idle");
+
+  useEffect(() => {
+    const existing = getGoogleMapsApiKey();
+    setSavedKey(existing);
+    if (existing) setKey(existing);
+  }, []);
 
   const handleSave = () => {
     setGoogleMapsApiKey(key);
+    setSavedKey(getGoogleMapsApiKey());
     refreshReferenceProvider();
     onProviderChanged?.();
-    setSaved("saved");
-    setTimeout(() => setSaved("idle"), 1500);
+    setReveal(false);
+    setStatus("saved");
+    setTimeout(() => setStatus("idle"), 1500);
   };
 
   const handleClear = () => {
     clearGoogleMapsApiKey();
     setKey("");
+    setSavedKey(null);
     refreshReferenceProvider();
     onProviderChanged?.();
-    setSaved("cleared");
-    setTimeout(() => setSaved("idle"), 1500);
+    setStatus("cleared");
+    setTimeout(() => setStatus("idle"), 1500);
   };
 
   return (
@@ -52,27 +73,38 @@ export function SettingsPanel({ onClose, onProviderChanged, className }: Props) 
 
       <div className="space-y-3 px-4 py-4">
         <div>
-          <Label className="mb-1.5 block text-xs">Google Maps API key</Label>
+          <Label className="mb-1.5 block text-xs">Street View API Key</Label>
           <p className="mb-2 text-[11px] text-subtle">
             Enables real Street View imagery in the reference pane. Needs the Maps JavaScript API and Street View
-            Static API enabled on the key. Stored only in this browser — never sent anywhere except directly to
-            Google's own SDK.
+            Static API enabled on the key. Saved in this browser and loaded automatically next time — never sent
+            anywhere except directly to Google&apos;s own SDK.
           </p>
-          <Input
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder="AIzaSy..."
-            autoComplete="off"
-            className="font-mono text-xs"
-          />
+          <div className="flex gap-2">
+            <Input
+              type={reveal ? "text" : "password"}
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder={savedKey ? maskKey(savedKey) : "AIzaSy..."}
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Street View API key"
+              className="font-mono text-xs"
+            />
+            <Button variant="outline" size="sm" onClick={() => setReveal((v) => !v)} disabled={!key}>
+              {reveal ? "Hide" : "Show"}
+            </Button>
+          </div>
+          {savedKey && (
+            <p className="mt-1.5 font-mono text-[11px] text-subtle">Saved key: {maskKey(savedKey)}</p>
+          )}
         </div>
 
         <div className="flex gap-2">
           <Button size="sm" onClick={handleSave} disabled={!key.trim()}>
-            {saved === "saved" ? "Saved" : "Save forever"}
+            {status === "saved" ? "Saved" : "Save"}
           </Button>
-          <Button variant="outline" size="sm" onClick={handleClear}>
-            {saved === "cleared" ? "Cleared" : "Clear"}
+          <Button variant="outline" size="sm" onClick={handleClear} disabled={!savedKey && !key}>
+            {status === "cleared" ? "Cleared" : "Clear"}
           </Button>
         </div>
       </div>
