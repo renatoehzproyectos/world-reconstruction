@@ -223,7 +223,8 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <div className="flex min-w-max items-center gap-2 pr-2">
           <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
             <Button variant={tool === "select" ? "secondary" : "ghost"} size="sm" onClick={() => selectTool("select")}>
               Select
@@ -281,6 +282,15 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
           <Button
             variant="outline"
             size="sm"
+            onClick={() => setOpenPanel((v) => (v === "settings" ? "none" : "settings"))}
+            aria-label="Open settings"
+            title="Open settings and configure Street View API key"
+          >
+            Settings
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setSpawnSerial((v) => v + 1)}
             title={
               spawnInfo
@@ -290,16 +300,10 @@ export function ReconstructionWorkspace({ className }: { className?: string }) {
           >
             Respawn on road
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setOpenPanel((v) => (v === "settings" ? "none" : "settings"))}
-          >
-            Settings
-          </Button>
           <Button variant="secondary" size="sm" onClick={() => exportFn?.()} disabled={!exportFn}>
             Export GLB
           </Button>
+          </div>
         </div>
       </div>
 
